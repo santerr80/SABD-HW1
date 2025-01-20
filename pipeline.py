@@ -2,7 +2,6 @@ import luigi
 import requests
 import os
 import tarfile
-import gzip
 
 
 class Download(luigi.Task):
@@ -21,6 +20,7 @@ class Download(luigi.Task):
             f.write(response.content)
         print(f"Загрузка завершена и сохранена в {self.output().path}")
 
+
 class ExtractFiles(luigi.Task):
     file_name = luigi.Parameter(default="GSE68849")
     output_dir = luigi.Parameter(default="./downloads")
@@ -29,11 +29,8 @@ class ExtractFiles(luigi.Task):
         return Download(file_name=self.file_name, output_dir=self.output_dir)
 
     def output(self):
-        # Возвращаем список локальных целей для каждого файла
-        tar_path = self.requires().output().path
-        with tarfile.open(tar_path, 'r') as tar:
-            members = tar.getnames()
-            return [luigi.LocalTarget(os.path.join(self.output_dir, f"data_{i + 1}")) for i in range(len(members))]
+        # Возвращаем один LocalTarget, который будет указывать на завершение задачи
+        return luigi.LocalTarget(os.path.join(self.output_dir, f"{self.file_name}_extracted.done"))
 
     def run(self):
         tar_path = self.requires().output().path
@@ -41,14 +38,14 @@ class ExtractFiles(luigi.Task):
 
         with tarfile.open(tar_path, 'r') as tar:
             members = tar.getnames()
-            for i, member in enumerate(members):
-                # Создаем директорию для каждого файла
-                data_dir = os.path.join(self.output_dir, f"data_{i + 1}")
-                os.makedirs(data_dir, exist_ok=True)
-
+            for member in members:
                 # Извлекаем файл в соответствующую директорию
-                tar.extract(member, path=data_dir)
-                print(f"Файл {member} извлечен в {data_dir}")
+                tar.extract(member, path=self.output_dir)
+                print(f"Файл {member} извлечен в {self.output_dir}")
+
+        # Создаем файл, чтобы обозначить, что задача завершена
+        with self.output().open('w') as f:
+            f.write('Extraction complete.')
 
         print(f"Извлечение завершено. Все файлы сохранены в {self.output_dir}")
 
