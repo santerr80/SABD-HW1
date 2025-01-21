@@ -140,5 +140,87 @@ class ProcessTxtFiles(luigi.Task):
             )
             df.to_csv(output_file, sep='\t', index=False)
 
+
+class TrimProbeFiles(luigi.Task):
+    input_dir = luigi.Parameter(default='./processed')
+    file_name = luigi.Parameter(default="GSE68849")
+
+    def requires(self):
+        return ProcessTxtFiles(file_name=self.file_name)    
+    
+    def output(self):
+        # Создаем список выходных целей для каждого найденного файла
+        output_files = []
+        for input_file in glob.glob(os.path.join(self.input_dir, '*Probes.tsv')):
+            output_path = input_file.replace('.tsv', '_trim.tsv')
+            output_files.append(luigi.LocalTarget(output_path))
+        return output_files
+
+    def run(self):
+        # Получаем список файлов для обработки
+        input_files = glob.glob(os.path.join(self.input_dir, '*Probes.tsv'))
+        
+        # Колонки, которые нужно удалить
+        columns_to_remove = [
+            'Definition',
+            'Ontology_Component',
+            'Ontology_Process',
+            'Ontology_Function',
+            'Synonyms',
+            'Obsolete_Probe_Id',
+            'Probe_Sequence'
+        ]
+        
+        # Обрабатываем каждый файл
+        for input_file in input_files:
+            # Читаем TSV файл
+            df = pd.read_csv(input_file, sep='\t')
+            
+            # Удаляем указанные колонки
+            df_trimmed = df.drop(columns=columns_to_remove, errors='ignore')
+            
+            # Создаем имя выходного файла
+            output_file = input_file.replace('.tsv', '_trim.tsv')
+            
+            # Сохраняем обработанные данные
+            df_trimmed.to_csv(output_file, sep='\t', index=False)
+
+
+class CleanupTextFiles(luigi.Task):
+    
+    file_name = luigi.Parameter(default="GSE68849")
+    
+    def requires(self):
+        return TrimProbeFiles(file_name=self.file_name)    
+    
+
+    def output(self):
+        # Создаем маркерный файл для подтверждения выполнения задачи
+        return luigi.LocalTarget('cleanup_complete.marker')
+
+    def complete(self):
+        # Проверяем существование входного файла
+        if not os.path.exists('./log'):
+            return False
+        return super().complete()
+    
+    def run(self):
+        # Проверяем содержимое файла log
+        with open('./processed/log', 'r') as log_file:
+            content = log_file.read().strip()
+            
+        # Если находим нужный текст
+        if content == "Все файлы обработаны":
+            # Проходим по всем файлам в каталоге extract и подкаталогах
+            for root, dirs, files in os.walk('./extract'):
+                for file in files:
+                    # Если файл имеет расширение .txt
+                    if file.endswith('.txt'):
+                        # Формируем полный путь к файлу
+                        file_path = os.path.join(root, file)
+                        # Удаляем файл
+                        os.remove(file_path)
+                        print(f"Удален файл: {file_path}")
+
 if __name__ == '__main__':
-    luigi.build([ProcessTxtFiles()], local_scheduler=True)
+    luigi.run(['CleanupTextFiles', '--local-scheduler'])
