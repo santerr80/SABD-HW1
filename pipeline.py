@@ -88,7 +88,7 @@ class ExtractGz(luigi.Task):
         print(f"Распаковка GZ файлов завершена")
 
 
-class ProcessTextFiles(luigi.Task):
+class ProcessTxtFiles(luigi.Task):
     file_name = luigi.Parameter(default="GSE68849")
     input_dir = luigi.Parameter(default='./extract')
     output_dir = luigi.Parameter(default='./processed')
@@ -97,15 +97,24 @@ class ProcessTextFiles(luigi.Task):
         return ExtractGz(file_name=self.file_name)
 
     def output(self):
-        # Создаем выходной каталог, если он не существует
-        os.makedirs(self.output_dir, exist_ok=True)
-        # Возвращаем список выходных файлов
-        return [luigi.LocalTarget(os.path.join(self.output_dir, f"processed_{os.path.basename(f)}")) 
-                for f in glob.glob(f"{self.input_dir}/**/*.txt", recursive=True)]
+        # Создаем маркерный файл для отслеживания выполнения
+        return luigi.LocalTarget(os.path.join(self.output_dir, 'log'))
 
-    def process_file(self, filepath):
+    def run(self):
+        # Создаем выходную директорию если её нет
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        # Ищем все txt файлы рекурсивно
+        for txt_file in Path(self.input_dir).rglob('*.txt'):
+            self.process_file(txt_file)
+
+        # Создаем маркерный файл
+        with self.output().open('w') as f:
+            f.write('Все файлы обработаны')
+
+    def process_file(self, file_path):
         dfs = {}
-        with open(filepath) as f:
+        with open(file_path) as f:
             write_key = None
             fio = io.StringIO()
             for l in f.readlines():
@@ -121,24 +130,15 @@ class ProcessTextFiles(luigi.Task):
                     fio.write(l)
             fio.seek(0)
             dfs[write_key] = pd.read_csv(fio, sep='\t')
-        return dfs
 
-    def run(self):
-        # Получаем список всех txt файлов в каталоге и подкаталогах
-        txt_files = glob.glob(f"{self.input_dir}/**/*.txt", recursive=True)
-        
-        for input_file in txt_files:
-            # Обрабатываем файл
-            processed_dfs = self.process_file(input_file)
-            
-            # Создаем имя выходного файла
-            output_filename = os.path.join(self.output_dir, f"processed_{os.path.basename(input_file)}")
-            
-            # Сохраняем результаты
-            with open(output_filename, 'w') as f:
-                for key, df in processed_dfs.items():
-                    f.write(f'[{key}]\n')
-                    df.to_csv(f, sep='\t', index=False)
+        # Сохраняем каждый датафрейм в отдельный tsv файл
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        for df_name, df in dfs.items():
+            output_file = os.path.join(
+                self.output_dir, 
+                f"{base_name}_{df_name}.tsv"
+            )
+            df.to_csv(output_file, sep='\t', index=False)
 
 if __name__ == '__main__':
-    luigi.build([ProcessTextFiles()], local_scheduler=True)
+    luigi.build([ProcessTxtFiles()], local_scheduler=True)
