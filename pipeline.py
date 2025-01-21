@@ -5,6 +5,9 @@ import tarfile
 import gzip
 import shutil
 from pathlib import Path
+import io
+import pandas as pd
+import glob
 
 class Download(luigi.Task):
     file_name = luigi.Parameter(default="GSE68849")
@@ -25,6 +28,7 @@ class Download(luigi.Task):
 
         if not os.path.exists(self.output().path):
             raise FileNotFoundError(f"Файл {self.output().path} не был создан.")
+
 
 class ExtractTar(luigi.Task):
     file_name = luigi.Parameter(default="GSE68849")
@@ -52,6 +56,7 @@ class ExtractTar(luigi.Task):
         
         Path(self.output().path).touch()
         print(f"Распаковка TAR завершена в {self.output_dir}")
+
 
 class ExtractGz(luigi.Task):
     file_name = luigi.Parameter(default="GSE68849")
@@ -82,5 +87,58 @@ class ExtractGz(luigi.Task):
         Path(self.output().path).touch()
         print(f"Распаковка GZ файлов завершена")
 
+
+class ProcessTextFiles(luigi.Task):
+    file_name = luigi.Parameter(default="GSE68849")
+    input_dir = luigi.Parameter(default='./extract')
+    output_dir = luigi.Parameter(default='./processed')
+
+    def requires(self):
+        return ExtractGz(file_name=self.file_name)
+
+    def output(self):
+        # Создаем выходной каталог, если он не существует
+        os.makedirs(self.output_dir, exist_ok=True)
+        # Возвращаем список выходных файлов
+        return [luigi.LocalTarget(os.path.join(self.output_dir, f"processed_{os.path.basename(f)}")) 
+                for f in glob.glob(f"{self.input_dir}/**/*.txt", recursive=True)]
+
+    def process_file(self, filepath):
+        dfs = {}
+        with open(filepath) as f:
+            write_key = None
+            fio = io.StringIO()
+            for l in f.readlines():
+                if l.startswith('['):
+                    if write_key:
+                        fio.seek(0)
+                        header = None if write_key == 'Heading' else 'infer'
+                        dfs[write_key] = pd.read_csv(fio, sep='\t', header=header)
+                    fio = io.StringIO()
+                    write_key = l.strip('[]\n')
+                    continue
+                if write_key:
+                    fio.write(l)
+            fio.seek(0)
+            dfs[write_key] = pd.read_csv(fio, sep='\t')
+        return dfs
+
+    def run(self):
+        # Получаем список всех txt файлов в каталоге и подкаталогах
+        txt_files = glob.glob(f"{self.input_dir}/**/*.txt", recursive=True)
+        
+        for input_file in txt_files:
+            # Обрабатываем файл
+            processed_dfs = self.process_file(input_file)
+            
+            # Создаем имя выходного файла
+            output_filename = os.path.join(self.output_dir, f"processed_{os.path.basename(input_file)}")
+            
+            # Сохраняем результаты
+            with open(output_filename, 'w') as f:
+                for key, df in processed_dfs.items():
+                    f.write(f'[{key}]\n')
+                    df.to_csv(f, sep='\t', index=False)
+
 if __name__ == '__main__':
-    luigi.build([ExtractGz()], local_scheduler=True)
+    luigi.build([ProcessTextFiles()], local_scheduler=True)
